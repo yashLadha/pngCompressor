@@ -1,6 +1,7 @@
 use neon::prelude::*;
 
 extern crate oxipng;
+use std::cmp::{max, min};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
@@ -38,7 +39,7 @@ fn perform(inputfile: String, outputfile: String) -> String {
 }
 
 /// Compress function to compress `png` files using onxipng.
-/// It spawns up some amount of threads, (configurable via PNG_COMPRESS_THREAD env
+/// It spawns up some amount of threads, (configurable via PNG_COMPRESS_THREADS env
 /// variable), default value is 8. Them it basically chunked the complete array
 /// which is sent for processing having the following structure.
 ///
@@ -67,11 +68,21 @@ fn compress(mut cx: FunctionContext) -> JsResult<JsNumber> {
 
     let arc_compress_arr = Arc::new(compress_arr);
     let mut handles = vec![];
-    let num_threads: usize = option_env!("PNG_COMPRESS_THREADS")
-        .unwrap_or("8")
-        .to_string()
-        .parse::<usize>()
-        .unwrap();
+    // Check for the env variable `PNG_COMPRESS_THREADS` for the value or fallback to the default
+    // value of 8. If the passed array size is less than the no of threads set or even the default
+    // fallback them use the array length to evenly distribute the load. In case of an invalid
+    // value set run it in the single thread.
+    let num_threads: usize = max(
+        min(
+            option_env!("PNG_COMPRESS_THREADS")
+                .unwrap_or("8")
+                .to_string()
+                .parse::<usize>()
+                .unwrap_or(0),
+            arc_compress_arr.len(),
+        ),
+        1,
+    );
     for _ in 0..num_threads {
         let data_clone = arc_compress_arr.clone();
         let th = thread::spawn(move || {
