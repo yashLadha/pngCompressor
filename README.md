@@ -33,9 +33,11 @@ After building pngcompressor, you can explore its exports at the Node REPL:
 ```sh
 $ npm install
 $ node
-> require('.').hello()
-"hello node"
+> require('.').compress([{ in: "input_png_file_path", out: "output_png_file_path" }])
 ```
+
+By default it will try to chunk the complete array using `8` threads but it can
+be configurable using the env variable `PNG_COMPRESS_THREADS`.
 
 ## Available Scripts
 
