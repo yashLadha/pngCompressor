@@ -1,7 +1,5 @@
 use neon::prelude::*;
-
-extern crate oxipng;
-use std::cmp::{max, min};
+use oxipng;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
@@ -31,11 +29,10 @@ fn perform(inputfile: String, outputfile: String) -> String {
     options.timeout = Some(Duration::from_secs(2));
     let infile = oxipng::InFile::Path(PathBuf::from(inputfile));
     let outfile = oxipng::OutFile::Path(Some(PathBuf::from(outputfile)));
-    if let Ok(_) = oxipng::optimize(&infile, &outfile, &options) {
-        return "done".to_string();
-    } else {
-        return "error".to_string();
-    };
+    match oxipng::optimize(&infile, &outfile, &options) {
+        Ok(_) => String::from("done"),
+        Err(_) => String::from("error"),
+    }
 }
 
 /// Compress function to compress `png` files using onxipng.
@@ -59,41 +56,45 @@ fn perform(inputfile: String, outputfile: String) -> String {
 fn compress(mut cx: FunctionContext) -> JsResult<JsNumber> {
     let js_arr_handle: Handle<JsArray> = cx.argument(0)?;
     let mut vec: Vec<Handle<JsValue>> = js_arr_handle.to_vec(&mut cx)?;
-    let compress_arr: Vec<CompressTask> = vec
-        .iter_mut()
-        .map(|val| {
-            return create_compress_task(val, &mut cx);
-        })
-        .collect();
+    let compress_arr = {
+        let arr = vec
+            .iter_mut()
+            .map(|val| create_compress_task(val, &mut cx))
+            .collect::<Vec<CompressTask>>();
 
-    let arc_compress_arr = Arc::new(compress_arr);
+        Arc::new(arr)
+    };
+
     let mut handles = vec![];
     // Check for the env variable `PNG_COMPRESS_THREADS` for the value or fallback to the default
     // value of 8. If the passed array size is less than the no of threads set or even the default
     // fallback them use the array length to evenly distribute the load. In case of an invalid
     // value set run it in the single thread.
-    let num_threads: usize = max(
-        min(
-            option_env!("PNG_COMPRESS_THREADS")
-                .unwrap_or("8")
-                .to_string()
-                .parse::<usize>()
-                .unwrap_or(0),
-            arc_compress_arr.len(),
-        ),
-        1,
-    );
-    for _ in 0..num_threads {
-        let data_clone = arc_compress_arr.clone();
+    let num_threads: usize = option_env!("PNG_COMPRESS_THREADS")
+        .unwrap_or("8")
+        .to_string()
+        .parse::<usize>()
+        .unwrap_or(1)
+        .max(compress_arr.len());
+
+    let chunk_size = (compress_arr.len() as f64 / num_threads as f64).ceil() as usize;
+    for idx in 0..num_threads {
+        let data_clone = compress_arr.clone();
         let th = thread::spawn(move || {
-            for item in data_clone.chunks(num_threads) {
-                let input = item[0].input.to_string();
-                let out = item[0].out.to_string();
-                perform(input, out);
-            }
+            data_clone
+                .chunks(chunk_size)
+                .nth(idx)
+                .unwrap()
+                .iter()
+                .for_each(|item| {
+                    let input = item.input.to_string();
+                    let out = item.out.to_string();
+                    perform(input, out);
+                })
         });
         handles.push(th);
     }
+
     for handle in handles {
         handle.join().unwrap();
     }
@@ -119,10 +120,10 @@ fn create_compress_task(val: &mut Handle<JsValue>, cx: &mut CallContext<JsObject
         .or_throw(cx)
         .unwrap()
         .value(cx);
-    return CompressTask {
+    CompressTask {
         input: infilename,
         out: outfilename,
-    };
+    }
 }
 
 register_module!(mut m, { m.export_function("compress", compress) });
